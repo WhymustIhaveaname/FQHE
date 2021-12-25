@@ -1,5 +1,5 @@
 # Density Functional Theory and the Fractional Quantum Hall Effect
-## Based on the work of Jain el. [1]
+Based on the work of Jain el. [1]
 
 ## Abstract
 
@@ -25,5 +25,5 @@ The following figure shows the self-consistency procedure and the usage of most 
 
 ## References
 
-[1] Yayun Hu and J. K. Jain. Kohn-sham theory of the fractional quantum hall effect. Phys. Rev. Lett., 123:176802, Oct 2019
-[2] David Tong. The Quantum Hall Effect. Jan 2016.
+1. Yayun Hu and J. K. Jain. Kohn-sham theory of the fractional quantum hall effect. Phys. Rev. Lett., 123:176802, Oct 2019
+2. David Tong. The Quantum Hall Effect. Jan 2016.

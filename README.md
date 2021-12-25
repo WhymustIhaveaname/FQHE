@@ -17,7 +17,7 @@ The following figure shows the self-consistency procedure and the usage of most 
 
 ## Todo List
 
-- [ ] Check the codes for computing ground state again.
+- [x] Check the codes for computing ground state again.
 - [ ] Try different `nu` and `m` to probe the limit of this algorithm
 - [ ] Put a point charge above the disk, both at the center and a little away from the center, to study how to excite anyons
 - [ ] Braiding

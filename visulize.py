@@ -20,5 +20,5 @@ def to_gif(pattern,iter,end_dup,dur,save_name):
     imageio.mimsave(save_name,frames,'GIF',duration=dur)
 
 if __name__=="__main__":
-    working_dir="./visiter_Vy_dec19/"
-    to_gif(working_dir+"%d.png",range(51),3,0.5,working_dir+"visiter.gif")
+    working_dir="./visiter_dec25_Vxy/"
+    to_gif(working_dir+"%d.png",range(81),3,0.5,working_dir+"visiter.gif")

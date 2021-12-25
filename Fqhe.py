@@ -20,7 +20,7 @@ def log(msg,l=1,end="\n",logfile=LOGFILE):
         with open(logfile,"a") as f:
             f.write(tempstr)
 
-import math,numpy,itertools,scipy,scipy.linalg,scipy.sparse.linalg,seaborn
+import math,numpy,itertools,scipy,scipy.linalg,scipy.sparse.linalg,pickle
 from scipy import sparse
 import matplotlib.pyplot as plt
 
@@ -41,13 +41,13 @@ log("Sample radius when Ne=%d, \\nu=%.4f: %.4f"%(Ne,nu,Rsmp))
 Lcut=2*(Rsmp+1*lb)
 #Lcut=math.sqrt(Ne/nu)
 # Discrete number and step size in each direction
-Npts=32
+Npts=128
 Lstep=Lcut/Npts
 log("m, nu, Mcf: %d, %.3f, %.3f"%(m_lauphlin,nu,Mcf))
 log("Cut Length, discrete step size: %.4f, %.4f"%(Lcut,Lstep))
 # weight for Ay
-ax_wt=1.0
-ay_wt=0.0
+ax_wt=0.5
+ay_wt=0.5
 log("ax_wt, ay_wt: %.1f, %.1f"%(ax_wt,ay_wt))
 # vacuum permittivity
 # using the data for GaAs
@@ -99,8 +99,9 @@ ewt_tab=numpy.zeros((2*Npts-1,2*Npts-1))
 for i,j in itertools.product(range(2*Npts-1),range(2*Npts-1)):
     ewt_tab[i,j]=calc_ewt(Npts-1-i,Npts-1-j)
 
-def heatmap(mats,titles=None):
-    fig,axs=plt.subplots(1,len(mats),figsize=(6.4*len(mats),4.8))
+def heatmap(mats,titles=None,savename=None):
+    # (6.4,4.8) is the default size of plt
+    fig,axs=plt.subplots(1,len(mats),figsize=(6.0*len(mats),4.8))
     plots=[]
     for i in range(len(mats)):
         p=axs[i].matshow(mats[i],cmap='hot')
@@ -108,14 +109,42 @@ def heatmap(mats,titles=None):
         axs[i].set_yticks([])
         fig.colorbar(p,ax=axs[i],shrink=0.8)
         if titles:
-            axs[i].set_title(titles[i])
+            axs[i].set_title(titles[i],fontsize=20)
         plots.append(p)
+    plt.show()
+    if savename:
+        fig.savefig(savename)
+
+def plot_profile(n):
+    midpt=Npts/2-0.5
+    rs=[];ns=[]
+    for i,j in itertools.product(range(Npts),range(Npts)):
+        r=math.sqrt((i-midpt)**2+(j-midpt)**2)*Lstep
+        if r>Lcut/2:
+            continue
+        rs.append(r)
+        ns.append(n[i,j])
+    xticks=[];xlabels=[]
+    nlb=0
+    while nlb*lb<Lcut/2:
+        xticks.append(nlb*lb)
+        xlabels.append("%d"%(nlb))
+        nlb+=1
+    plt.figure(figsize=(12,4))
+    plt.plot(rs,ns,'.')
+    plt.axvline(x=Rsmp)
+    plt.xticks(xticks,xlabels)
+    plt.title("Density Profile for $m=%d$, $\\nu=%.4f$"%(m_lauphlin,nu),fontsize=20)
+    plt.xlabel('$r/l_B$',fontsize=20)
+    plt.ylabel('$\\nu_{local}$', fontsize=20)
     plt.show()
 
 class Fqhe():
-    def __init__(self,n):
+    def __init__(self,n,turn_on_VT=False):
         self.n=n
         self.VT_last=None
+        self.turn_on_VT=turn_on_VT
+        log("turn_on_VT: %s"%(self.turn_on_VT))
 
         # some parameters from Hu PRL 123, 176802 (2019)
         # will be used in gen_Vxc
@@ -192,7 +221,7 @@ class Fqhe():
         VT=ay_wt*VTy+ax_wt*VTx
         # maybe?
         #VT/=Ne
-        #VT/=2
+        #VT/=4
 
         if self.VT_last is not None:
             VTre=VT*self.lr+self.VT_last*(1-self.lr)
@@ -276,6 +305,10 @@ class Fqhe():
         return Ve
 
     def range_on_disk(ax):
+        """
+            for debug
+            return the range of ax on the positive background disk
+        """
         bx=ax*(n_posi!=0)
         return "%.2f~%.2f"%(bx.min(),bx.max())
 
@@ -309,6 +342,25 @@ class Fqhe():
             eigvec.append(e)
         eigvec=numpy.transpose(eigvec)
         return Fqhe.eig_to_n(eigvec),eigvec
+
+    def gen_initst_c():
+        eigvec=[]
+        for m in range(Ne):
+            mexp=int(m/nu+1)
+            e=numpy.zeros(Npts*Npts,dtype=numpy.cdouble)
+            for i,j in itertools.product(range(Npts),range(Npts)):
+                r=((i-Npts/2+0.5)+(j-Npts/2+0.5)*1j)*Lstep/lb
+                e[i*Npts+j]=(r**mexp)*math.exp(-abs(r)**2/4)
+            e/=numpy.linalg.norm(e)
+            eigvec.append(e)
+        eigvec=numpy.transpose(eigvec)
+        return Fqhe.eig_to_n(eigvec),eigvec
+
+    def load_initst(filename):
+        log("loading init state from %s"%(filename))
+        with open(filename,"rb") as f:
+            n_neo,eigvec=pickle.load(f)
+        return n_neo,eigvec
 
     def gen_T(self):
         """
@@ -360,8 +412,10 @@ class Fqhe():
         """
         assert self.A_updated
         Vxc=self.gen_Vxc()
-        VT=self.gen_VT(eigvec)
-        #VT=numpy.zeros(self.n.shape)
+        if self.turn_on_VT:
+            VT=self.gen_VT(eigvec)
+        else:
+            VT=numpy.zeros(self.n.shape)
         Ve=self.gen_Ve()
         log("Ve: %s, Vxc: %s, VT: %s"%(Fqhe.range_on_disk(Ve),Fqhe.range_on_disk(Vxc),Fqhe.range_on_disk(VT)))
 
@@ -370,6 +424,42 @@ class Fqhe():
         ind=[i*Npts+j for i,j in itertools.product(range(Npts),range(Npts))]
         Vks=sparse.coo_matrix((Vks,(ind,ind)),shape=(self.n.size,self.n.size),dtype=numpy.cdouble)
         return Vks
+
+def dft_step(F,eigvec):
+    T=F.gen_T()
+    Vks=F.gen_Vks(eigvec)
+    H=T+Vks
+    assert numpy.abs(H-H.getH()).max()<1e-13, "H not Hermitian: %.4e"%(numpy.abs(H-H.getH()).max())
+    max_energy=scipy.sparse.linalg.eigs(H,k=1,return_eigenvectors=False).real
+    H-=sparse.eye(F.n.size,dtype=numpy.cdouble)*max_energy[0]
+    H=H.tocsr()
+    energies,eigvec=scipy.sparse.linalg.eigs(H,k=Ne)
+    log("energies: %s"%(" ".join(["%.4f"%(i+max_energy) for i in energies.real])))
+    return Fqhe.eig_to_n(eigvec),eigvec
+
+def main(N_update_per_step=1):
+    #n_neo,eigvec=Fqhe.gen_initst_b()
+    n_neo,eigvec=Fqhe.load_initst("eig_noVT_m3_nu0.33_dN0.019.dump")
+    F=Fqhe(n_neo)
+    #heatmap([n_neo,n_neo],["","init st"],savename="./visiter_dec25/0.png")
+    heatmap([n_posi,n_neo],["positive bk","init st"])
+    plot_profile(F.n)
+    for i in range(1,41):
+        n_neo,eigvec=dft_step(F,eigvec)
+        dN=numpy.abs(n_neo-F.n).sum()*Lstep**2
+        lr=min(0.25,N_update_per_step/dN)
+        log("iter %3d: dN=%.4f, lr=%.3f"%(i,dN,lr))
+        F.update_n(n_neo,lr)
+        if i<5 or i%5==0:
+            heatmap([n_neo,F.n],["neo n","avg n, dN=%.4f"%(dN)],savename="./visiter_dec25/%d.png"%(i))
+            plot_profile(F.n)
+        if dN<Ne*0.002:
+            log("stop at iter %d"%(i))
+            break
+    """with open("eig_noVT_m%d_nu%.2f_dN%.3f.dump"%(m_lauphlin,nu,dN),"wb") as f:
+        pickle.dump((n_neo,eigvec),f)"""
+    plot_profile(F.n)
+
 
 def test1():
     n,eigvec=Fqhe.gen_initst_a()
@@ -385,32 +475,6 @@ def test1():
     seaborn.heatmap(Ve,square=True)
     plt.show()
 
-def dft_step(F,eigvec):
-    T=F.gen_T()
-    Vks=F.gen_Vks(eigvec)
-    H=T+Vks
-    assert numpy.abs(H-H.getH()).max()<1e-13, "H not Hermitian: %.4e"%(numpy.abs(H-H.getH()).max())
-    max_energy=scipy.sparse.linalg.eigs(H,k=1,return_eigenvectors=False).real
-    H-=sparse.eye(F.n.size,dtype=numpy.cdouble)*max_energy[0]
-    H=H.tocsr()
-    energies,eigvec=scipy.sparse.linalg.eigs(H,k=Ne)
-    log("energies: %s"%(energies.real[0:4]+max_energy))
-    return Fqhe.eig_to_n(eigvec),eigvec
-
-def main(N_update_per_step=0.5):
-    """log("n_posi.sum(): %.2f=-%d+%e"%(n_posi.sum()*Lstep**2,Ne,n_posi.sum()*Lstep**2+Ne))
-    seaborn.heatmap(n_posi,square=True,xticklabels=False, yticklabels=False)
-    plt.show()"""
-    n_neo,eigvec=Fqhe.gen_initst_b()
-    F=Fqhe(n_neo)
-    for i in range(3):
-        n_neo,eigvec=dft_step(F,eigvec)
-        dN=numpy.abs(n_neo-F.n).sum()*Lstep**2
-        lr=min(0.2,N_update_per_step/dN)
-        log("iter %3d: dN=%.4f, lr=%.3f"%(i,dN,lr))
-        F.update_n(n_neo,lr)
-        if True:
-            heatmap([n_neo,F.n],["neo n","avg n"])
 
 if __name__=="__main__":
     #test1()

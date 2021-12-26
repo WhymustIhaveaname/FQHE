@@ -133,18 +133,20 @@ def plot_profile(n):
     plt.figure(figsize=(12,4))
     plt.plot(rs,ns,'.')
     plt.axvline(x=Rsmp)
-    plt.xticks(xticks,xlabels)
     plt.title("Density Profile for $m=%d$, $\\nu=%.4f$"%(m_lauphlin,nu),fontsize=20)
     plt.xlabel('$r/l_B$',fontsize=20)
     plt.ylabel('$\\nu_{local}$', fontsize=20)
+    plt.ylim(0,0.6)
+    plt.xlim(0,Lcut/2)
+    plt.xticks(xticks,xlabels)
+    plt.grid()
     plt.show()
 
 class Fqhe():
-    def __init__(self,n,turn_on_VT=False):
+    def __init__(self,n,eigvec,VT_switch=False,VTrn=1.0):
         self.n=n
-        self.VT_last=None
-        self.turn_on_VT=turn_on_VT
-        log("turn_on_VT: %s"%(self.turn_on_VT))
+        self.VT_switch=VT_switch
+        log("VT: %s, VT_renormalization: %.1f"%(self.VT_switch,VTrn))
 
         # some parameters from Hu PRL 123, 176802 (2019)
         # will be used in gen_Vxc
@@ -153,6 +155,9 @@ class Fqhe():
         log("eu, a, b, f: %.4f, %.2f, %.2f, %.2f"%(eu,self.a,self.b,self.f))
 
         self.update_n(n,1)
+        if self.VT_switch:
+            self.VTrn=VTrn
+            self.VT_last=numpy.zeros(self.n.shape)
 
     def update_n(self,n_neo,lr):
         self.lr=lr
@@ -166,7 +171,7 @@ class Fqhe():
             generate A from density n
             in the gauge Ax=0, Ay(x,y)=int_{0}^{x} dxi B(xi,y)
         """
-        assert self.A_updated==False, "A has been updated since last update_n, are you running gen_A twice?"
+        assert not self.A_updated, "gen_A has been called by update_n, you need not call it manually"
         # A[i,j] i->y, j->x
         B=B0-(m_lauphlin-1)*self.n
         self.Ax=Fqhe.gen_Ax(B)*ax_wt
@@ -215,22 +220,18 @@ class Fqhe():
             generate VT for orbits eigvec given Axy
             epe_last and lr are for slow-updating
         """
+        assert self.n_updated, "seems that you are generating VT twice without update n"
+        assert self.A_updated, "seems that A has not been updated"
         VTy=Fqhe.gen_VTy(self.Ay,eigvec)
         VTx=Fqhe.gen_VTx(self.Ax,eigvec)
         #heatmap([VTx,VTy],["VTx","VTy"])
-        VT=ay_wt*VTy+ax_wt*VTx
-        # maybe?
-        #VT/=Ne
-        #VT/=4
-
-        if self.VT_last is not None:
-            VTre=VT*self.lr+self.VT_last*(1-self.lr)
-        else:
-            VTre=VT
-
-        self.VT_last=VT
+        VT=(ay_wt*VTy+ax_wt*VTx)/self.VTrn
+        #log("lr: %.4f\nnew VT:\n%s\nlast_VT:\n%s"%(self.lr,VT,self.VT_last))
+        self.VT_last=VT*self.lr+self.VT_last*(1-self.lr)
+        #log("updated VT:\n%s"%(self.VT_last))
+        #heatmap([VT,self.VT_last])
         self.n_updated=False
-        return VTre
+        return self.VT_last
 
     def gen_VTy(Ay,eigvec):
         dVT=numpy.zeros(Ay.shape)
@@ -412,12 +413,13 @@ class Fqhe():
         """
         assert self.A_updated
         Vxc=self.gen_Vxc()
-        if self.turn_on_VT:
+        if self.VT_switch:
             VT=self.gen_VT(eigvec)
         else:
             VT=numpy.zeros(self.n.shape)
         Ve=self.gen_Ve()
         log("Ve: %s, Vxc: %s, VT: %s"%(Fqhe.range_on_disk(Ve),Fqhe.range_on_disk(Vxc),Fqhe.range_on_disk(VT)))
+        #heatmap([self.n,Ve,Vxc,VT],["n","Ve","Vxc","VT"])
 
         Vks=Vxc+VT+Ve
         Vks=[Vks[i,j] for i,j in itertools.product(range(Npts),range(Npts))]
@@ -437,29 +439,40 @@ def dft_step(F,eigvec):
     log("energies: %s"%(" ".join(["%.4f"%(i+max_energy) for i in energies.real])))
     return Fqhe.eig_to_n(eigvec),eigvec
 
-def main(N_update_per_step=1):
-    #n_neo,eigvec=Fqhe.gen_initst_b()
-    n_neo,eigvec=Fqhe.load_initst("eig_noVT_m3_nu0.33_dN0.019.dump")
-    F=Fqhe(n_neo)
-    #heatmap([n_neo,n_neo],["","init st"],savename="./visiter_dec25/0.png")
-    heatmap([n_posi,n_neo],["positive bk","init st"])
+def main(N_update_per_step=1,figdir="./visiter_dec26"):
+    n_neo,eigvec=Fqhe.gen_initst_b()
+    #n_neo,eigvec=Fqhe.load_initst("eig_noVT_m3_nu33_dN0009.dump")
+    F=Fqhe(n_neo,eigvec,VT_switch=True)
+    #F=Fqhe(n_neo,eigvec,VT_switch=False)
+
+    #heatmap([n_posi,n_neo],["positive bk","init st"])
+    heatmap([n_neo,n_neo],["","init st"],savename=figdir+"/0.png")
     plot_profile(F.n)
-    for i in range(1,41):
+
+    for i in range(1,3):
         n_neo,eigvec=dft_step(F,eigvec)
         dN=numpy.abs(n_neo-F.n).sum()*Lstep**2
         lr=min(0.25,N_update_per_step/dN)
-        log("iter %3d: dN=%.4f, lr=%.3f"%(i,dN,lr))
         F.update_n(n_neo,lr)
+
+        log("iter %3d: dN=%.4f, lr=%.3f"%(i,dN,lr))
         if i<5 or i%5==0:
-            heatmap([n_neo,F.n],["neo n","avg n, dN=%.4f"%(dN)],savename="./visiter_dec25/%d.png"%(i))
+            heatmap([n_neo,F.n],["neo n","avg n, dN=%.4f"%(dN)],savename=figdir+"/%d.png"%(i))
             plot_profile(F.n)
-        if dN<Ne*0.002:
+        if dN<Ne*0.001:
             log("stop at iter %d"%(i))
             break
-    """with open("eig_noVT_m%d_nu%.2f_dN%.3f.dump"%(m_lauphlin,nu,dN),"wb") as f:
-        pickle.dump((n_neo,eigvec),f)"""
     plot_profile(F.n)
+    savename="eig_VT%s_m%d_nu%d_dN%04d.dump"%(F.VT_switch,m_lauphlin,nu*1e2,dN*1e4)
+    with open(savename,"wb") as f:
+        log("saving state to %s"%(savename))
+        pickle.dump((n_neo,eigvec),f)
 
+def main_for_plot():
+    n_neo,eigvec=Fqhe.load_initst("eig_noVT_m3_nu33_dN0009.dump")
+    F=Fqhe(n_neo,eigvec,VT_switch=True)
+    #plot_profile(F.n)
+    F.gen_Vks(eigvec)
 
 def test1():
     n,eigvec=Fqhe.gen_initst_a()

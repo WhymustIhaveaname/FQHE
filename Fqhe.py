@@ -20,12 +20,13 @@ def log(msg,l=1,end="\n",logfile=LOGFILE):
         with open(logfile,"a") as f:
             f.write(tempstr)
 
-import math,numpy,itertools,scipy,scipy.linalg,scipy.sparse.linalg,pickle
+import math,numpy,scipy,scipy.linalg,scipy.sparse.linalg
+import itertools,pickle,os
 from scipy import sparse
 import matplotlib.pyplot as plt
 
 # Number of electrons
-Ne=10
+Ne=50
 # Laughlin m
 m_lauphlin=3
 # Filling fraction
@@ -41,7 +42,7 @@ log("Sample radius when Ne=%d, \\nu=%.4f: %.4f"%(Ne,nu,Rsmp))
 Lcut=2*(Rsmp+1*lb)
 #Lcut=math.sqrt(Ne/nu)
 # Discrete number and step size in each direction
-Npts=128
+Npts=288
 Lstep=Lcut/Npts
 log("m, nu, Mcf: %d, %.3f, %.3f"%(m_lauphlin,nu,Mcf))
 log("Cut Length, discrete step size: %.4f, %.4f"%(Lcut,Lstep))
@@ -75,6 +76,20 @@ for i,j in itertools.product(range(Npts),range(Npts)):
     n_posi[i,j]=calc_nposi(i,j)
 n_posi*=-Ne/(n_posi.sum()*Lstep**2)
 del sq2
+
+def gen_Vimp(locxy,h,q):
+    """
+        q: positive q stands for electron
+    """
+    locx,locy=locxy
+    log("generating impurity potential: xy=(%.2f,%.2f) h=%.1f q=%.1f"%(locx,locy,h,q))
+    hsq=h*h
+    Vimp=numpy.zeros((Npts,Npts))
+    for i,j in itertools.product(range(Npts),range(Npts)):
+        rsq=((i+0.5)*Lstep-locx)**2+((j+0.5)*Lstep-locy)**2
+        Vimp[i,j]=q/math.sqrt(rsq+hsq)
+    Vimp*=(1/4*math.pi*ep0)
+    return Vimp
 
 # compute Columb potential
 def calc_ewt(i,j):
@@ -120,7 +135,7 @@ def plot_profile(n):
     rs=[];ns=[]
     for i,j in itertools.product(range(Npts),range(Npts)):
         r=math.sqrt((i-midpt)**2+(j-midpt)**2)*Lstep
-        if r>Lcut/2:
+        if r>Lcut/2+lb:
             continue
         rs.append(r)
         ns.append(n[i,j])
@@ -143,9 +158,13 @@ def plot_profile(n):
     plt.show()
 
 class Fqhe():
-    def __init__(self,n,eigvec,VT_switch=False,VTrn=1.0):
+    def __init__(self,n,eigvec,VT_switch=False,VTrn=1.0,Vimp=None):
         self.n=n
         self.VT_switch=VT_switch
+        if Vimp is not None:
+            self.Vimp=Vimp
+        else:
+            self.Vimp=numpy.zeros(self.n.shape)
         log("VT: %s, VT_renormalization: %.1f"%(self.VT_switch,VTrn))
 
         # some parameters from Hu PRL 123, 176802 (2019)
@@ -321,6 +340,9 @@ class Fqhe():
         return n
 
     def gen_initst_a():
+        """
+        generate init state by plane waves
+        """
         sN=math.ceil(math.sqrt(Ne)/2)
         l=[(i,j) for i in range(-sN,sN+1) for j in range(-sN,sN+1)]
         l.sort(key=lambda x:abs(x[0])+abs(x[1]))
@@ -332,26 +354,50 @@ class Fqhe():
         eigvec=numpy.transpose(eigvec)/math.sqrt(Npts*Npts)
         return Fqhe.eig_to_n(eigvec),eigvec
 
+    def gen_LL(Lz,num_lls=4):
+        """
+        generate Landau levels
+        """
+        r=numpy.zeros(Npts*Npts,dtype=numpy.cdouble)
+        for i,j in itertools.product(range(Npts),range(Npts)):
+            nft=i*Npts+j
+            r[nft]=((i-Npts/2+0.5)+(j-Npts/2+0.5)*1j)*Lstep/lb
+        rsq=r.real**2+r.imag**2
+
+        lls=[[] for i in range(num_lls)]
+        for m in range(Lz):
+            e=(r**m)*numpy.exp(-rsq/4)
+            e/=numpy.linalg.norm(e)
+            lls[0].append(e)
+        for n,m in itertools.product(range(1,num_lls),range(Lz)):
+            if n==1:
+                e=lls[0][m]*((m+1)-(1/2)*rsq)
+            elif n==2:
+                e=lls[0][m]*((m+1)*(m+2)-(m+2)*rsq+(1/4)*rsq**2)
+            elif n==3:
+                e=lls[0][m]*((m+1)*(m+2)*(m+3)-(3/2)*(m+2)*(m+3)*rsq+(3/4)*(m+3)*rsq**2-(1/8)*rsq**3)
+            e/=numpy.linalg.norm(e)
+            lls[n].append(e)
+        return lls
+
     def gen_initst_b():
-        eigvec=[]
+        """eigvec=[]
         for m in range(Ne):
             e=numpy.zeros(Npts*Npts,dtype=numpy.cdouble)
             for i,j in itertools.product(range(Npts),range(Npts)):
                 r=((i-Npts/2+0.5)+(j-Npts/2+0.5)*1j)*Lstep/lb
                 e[i*Npts+j]=(r**m)*math.exp(-abs(r)**2/4)
             e/=numpy.linalg.norm(e)
-            eigvec.append(e)
+            eigvec.append(e)"""
+        eigvec=Fqhe.gen_LL(Ne,num_lls=1)[0]
         eigvec=numpy.transpose(eigvec)
         return Fqhe.eig_to_n(eigvec),eigvec
 
     def gen_initst_c():
+        LLs=Fqhe.gen_LL(Ne,num_lls=4)
         eigvec=[]
         for m in range(Ne):
-            mexp=int(m/nu+1)
-            e=numpy.zeros(Npts*Npts,dtype=numpy.cdouble)
-            for i,j in itertools.product(range(Npts),range(Npts)):
-                r=((i-Npts/2+0.5)+(j-Npts/2+0.5)*1j)*Lstep/lb
-                e[i*Npts+j]=(r**mexp)*math.exp(-abs(r)**2/4)
+            e=LLs[0][m]-LLs[1][m]+LLs[2][m]-LLs[3][m]
             e/=numpy.linalg.norm(e)
             eigvec.append(e)
         eigvec=numpy.transpose(eigvec)
@@ -418,10 +464,11 @@ class Fqhe():
         else:
             VT=numpy.zeros(self.n.shape)
         Ve=self.gen_Ve()
-        log("Ve: %s, Vxc: %s, VT: %s"%(Fqhe.range_on_disk(Ve),Fqhe.range_on_disk(Vxc),Fqhe.range_on_disk(VT)))
+        #Fqhe.range_on_disk(Ve),Fqhe.range_on_disk(Vxc),Fqhe.range_on_disk(VT),Fqhe.range_on_disk(Vimp)
+        log("Ve: %s, Vxc: %s, VT: %s, Vimp: %s"%(tuple([Fqhe.range_on_disk(i) for i in [Ve,Vxc,VT,self.Vimp]])))
         #heatmap([self.n,Ve,Vxc,VT],["n","Ve","Vxc","VT"])
 
-        Vks=Vxc+VT+Ve
+        Vks=Vxc+VT+Ve+self.Vimp
         Vks=[Vks[i,j] for i,j in itertools.product(range(Npts),range(Npts))]
         ind=[i*Npts+j for i,j in itertools.product(range(Npts),range(Npts))]
         Vks=sparse.coo_matrix((Vks,(ind,ind)),shape=(self.n.size,self.n.size),dtype=numpy.cdouble)
@@ -432,47 +479,92 @@ def dft_step(F,eigvec):
     Vks=F.gen_Vks(eigvec)
     H=T+Vks
     assert numpy.abs(H-H.getH()).max()<1e-13, "H not Hermitian: %.4e"%(numpy.abs(H-H.getH()).max())
-    max_energy=scipy.sparse.linalg.eigs(H,k=1,return_eigenvectors=False).real
+    max_energy=scipy.sparse.linalg.eigs(H,k=1,return_eigenvectors=False,v0=eigvec[:,0]).real
     H-=sparse.eye(F.n.size,dtype=numpy.cdouble)*max_energy[0]
     H=H.tocsr()
-    energies,eigvec=scipy.sparse.linalg.eigs(H,k=Ne)
-    log("energies: %s"%(" ".join(["%.4f"%(i+max_energy) for i in energies.real])))
+    energies,eigvec=scipy.sparse.linalg.eigs(H,k=Ne,v0=eigvec[:,0])
+    log("energies:\n%s"%(" ".join(["%.2f"%(i+max_energy) for i in energies.real])))
     return Fqhe.eig_to_n(eigvec),eigvec
 
-def main(N_update_per_step=1,figdir="./visiter_dec26"):
-    n_neo,eigvec=Fqhe.gen_initst_b()
-    #n_neo,eigvec=Fqhe.load_initst("eig_noVT_m3_nu33_dN0009.dump")
-    F=Fqhe(n_neo,eigvec,VT_switch=True)
-    #F=Fqhe(n_neo,eigvec,VT_switch=False)
+def main():
+    figdir="./fig_%s"%(time.strftime("%b%d").lower())
+    if not os.path.exists(figdir):
+        os.mkdir(figdir)
+
+    #Vimp=gen_Vimp((Lcut/2,Lcut/2+6*lb),0.2,10)
+    #heatmap([n_posi,Vimp],["posi bk","Vimp"])
+
+    #n_neo,eigvec=Fqhe.gen_initst_c()
+    n_neo,eigvec=Fqhe.load_initst("./Ne50Npts288/eig_Ne50_m3_nu33_VTFalse_dN37465.dump")
+
+    F=Fqhe(n_neo,eigvec,VT_switch=False)
+    #F=Fqhe(n_neo,eigvec,VT_switch=True)
+    #F=Fqhe(n_neo,eigvec,VT_switch=True,Vimp=Vimp)
 
     #heatmap([n_posi,n_neo],["positive bk","init st"])
     heatmap([n_neo,n_neo],["","init st"],savename=figdir+"/0.png")
     plot_profile(F.n)
 
-    for i in range(1,3):
+    for i in range(1,101):
         n_neo,eigvec=dft_step(F,eigvec)
         dN=numpy.abs(n_neo-F.n).sum()*Lstep**2
-        lr=min(0.25,N_update_per_step/dN)
+        lr=min(dN/Ne+0.01,0.1)
         F.update_n(n_neo,lr)
 
-        log("iter %3d: dN=%.4f, lr=%.3f"%(i,dN,lr))
+        log("iter %3d: dN=%.4f, lr=%.1f%%"%(i,dN,lr*100))
         if i<5 or i%5==0:
             heatmap([n_neo,F.n],["neo n","avg n, dN=%.4f"%(dN)],savename=figdir+"/%d.png"%(i))
             plot_profile(F.n)
-        if dN<Ne*0.001:
+        if dN<Ne*0.01:
             log("stop at iter %d"%(i))
             break
     plot_profile(F.n)
-    savename="eig_VT%s_m%d_nu%d_dN%04d.dump"%(F.VT_switch,m_lauphlin,nu*1e2,dN*1e4)
+    savename="eig_Ne%d_m%d_nu%d_VT%s_dN%04d.dump"%(Ne,m_lauphlin,nu*1e2,F.VT_switch,dN*1e4)
     with open(savename,"wb") as f:
         log("saving state to %s"%(savename))
         pickle.dump((n_neo,eigvec),f)
 
-def main_for_plot():
-    n_neo,eigvec=Fqhe.load_initst("eig_noVT_m3_nu33_dN0009.dump")
+def plot1():
+    n_neo,eigvec=Fqhe.load_initst("./Ne10Npts128/eig_VTTrue_m3_nu33_dN0089.dump")
     F=Fqhe(n_neo,eigvec,VT_switch=True)
-    #plot_profile(F.n)
+    plot_profile(F.n)
     F.gen_Vks(eigvec)
+
+def plot2():
+    n_neo,eigvec=Fqhe.load_initst("./Ne10Npts128/eig_VTTrue_m3_nu33_dN0089.dump")
+    lls=Fqhe.gen_LL(10)
+    eigvec=eigvec.transpose()
+    #eigvec=lls[2][0:10]
+    eigoverlap=[[] for i in eigvec]
+
+    xs=list(range(len(lls[0])))
+    fig,axs=plt.subplots(1,4,figsize=(6.4*4,4.8))
+    for i,e in enumerate(eigvec):
+        overlap=[abs(numpy.sum(e.conjugate()*l)) for l in lls[0]]
+        eigoverlap[i]+=overlap
+        axs[0].plot(xs,overlap,label="%d"%(i))
+    log(["%.4f"%(sum([j**2 for j in i])) for i in eigoverlap])
+    for i,e in enumerate(eigvec):
+        overlap=[abs(numpy.sum(e.conjugate()*l)) for l in lls[1]]
+        eigoverlap[i]+=overlap
+        axs[1].plot(xs,overlap,label="%d"%(i))
+    log(["%.4f"%(sum([j**2 for j in i])) for i in eigoverlap])
+    for i,e in enumerate(eigvec):
+        overlap=[abs(numpy.sum(e.conjugate()*l)) for l in lls[2]]
+        eigoverlap[i]+=overlap
+        axs[2].plot(xs,overlap,label="%d"%(i))
+    log(["%.4f"%(sum([j**2 for j in i])) for i in eigoverlap])
+    for i,e in enumerate(eigvec):
+        overlap=[abs(numpy.sum(e.conjugate()*l)) for l in lls[3]]
+        eigoverlap[i]+=overlap
+        axs[3].plot(xs,overlap,label="%d"%(i))
+    log(["%.4f"%(sum([j**2 for j in i])) for i in eigoverlap])
+    axs[0].legend()
+    axs[0].set_ylim(0,0.9)
+    axs[1].set_ylim(0,0.9)
+    axs[2].set_ylim(0,0.9)
+    axs[3].set_ylim(0,0.9)
+    plt.show()
 
 def test1():
     n,eigvec=Fqhe.gen_initst_a()
@@ -488,6 +580,11 @@ def test1():
     seaborn.heatmap(Ve,square=True)
     plt.show()
 
+def test_gen_Vimp():
+    hs=(1.0,2.0,3.0,4.0)
+    Vimps=[gen_Vimp((Lcut/2,Lcut/2),h,1) for h in hs]
+    heatmap(Vimps,["h=%1.f"%(h) for h in hs])
+    #plot_profile(Vimps[0])
 
 if __name__=="__main__":
     #test1()

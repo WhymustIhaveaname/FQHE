@@ -8,8 +8,7 @@ LOGFILE="/home/public/youran_FQHE/Fqhe.log"
 def log(msg,l=1,end="\n",logfile=LOGFILE):
     st=traceback.extract_stack()[-2]
     lstr=LOGLEVEL[l]
-    #now_str="%s %03d"%(time.strftime("%y/%m/%d %H:%M:%S",time.localtime()),math.modf(time.time())[0]*1000)
-    now_str="%s"%(time.strftime("%y/%b %H:%M:%S",time.localtime()),)
+    now_str="%s.%03d"%(time.strftime("%d %H:%M:%S",time.localtime()),math.modf(time.time())[0]*1000)
     perfix="%s [%s,%s:%03d]"%(now_str,lstr,st.name,st.lineno)
     if l<3:
         tempstr="%s %s%s"%(perfix,str(msg),end)
@@ -26,7 +25,7 @@ from scipy import sparse
 import matplotlib.pyplot as plt
 
 # Number of electrons
-Ne=50
+Ne=32
 # Laughlin m
 m_lauphlin=3
 # Filling fraction
@@ -39,10 +38,11 @@ Rsmp=math.sqrt(Ne/(nu*math.pi))
 lb=1/math.sqrt(2*math.pi)
 log("Sample radius when Ne=%d, \\nu=%.4f: %.4f"%(Ne,nu,Rsmp))
 # Compute boundry size
+# for 32 electrons, 99.9% of them are in Rsmp+0.3*lb, 99.99% are in Rsmp+0.5*lb
 Lcut=2*(Rsmp+1*lb)
 #Lcut=math.sqrt(Ne/nu)
 # Discrete number and step size in each direction
-Npts=288
+Npts=200
 Lstep=Lcut/Npts
 log("m, nu, Mcf: %d, %.3f, %.3f"%(m_lauphlin,nu,Mcf))
 log("Cut Length, discrete step size: %.4f, %.4f"%(Lcut,Lstep))
@@ -55,13 +55,14 @@ log("ax_wt, ay_wt: %.1f, %.1f"%(ax_wt,ay_wt))
 ep0=2.585105102e-3*12.6
 # background B
 B0=1
-
+# R
+Rinter=5*lb
 
 # positive disk
 sq2=math.sqrt(2)
-def calc_nposi(i,j):
+def calc_nposi(i,j,R):
     rij=math.sqrt((i+0.5-Npts/2)**2+(j+0.5-Npts/2)**2)
-    dr=(Rsmp/Lstep)-(rij-sq2/2)
+    dr=(R/Lstep)-(rij-sq2/2)
     if dr>sq2:
         return 1
     elif dr<0:
@@ -73,8 +74,12 @@ def calc_nposi(i,j):
 
 n_posi=numpy.zeros((Npts,Npts))
 for i,j in itertools.product(range(Npts),range(Npts)):
-    n_posi[i,j]=calc_nposi(i,j)
+    n_posi[i,j]=calc_nposi(i,j,Rsmp)
 n_posi*=-Ne/(n_posi.sum()*Lstep**2)
+
+mask_inter=numpy.zeros((Npts,Npts))
+for i,j in itertools.product(range(Npts),range(Npts)):
+    mask_inter[i,j]=calc_nposi(i,j,Rinter)
 del sq2
 
 def gen_Vimp(locxy,h,q):
@@ -86,9 +91,9 @@ def gen_Vimp(locxy,h,q):
     hsq=h*h
     Vimp=numpy.zeros((Npts,Npts))
     for i,j in itertools.product(range(Npts),range(Npts)):
-        rsq=((i+0.5)*Lstep-locx)**2+((j+0.5)*Lstep-locy)**2
+        rsq=((i+0.5)*Lstep-locy)**2+((j+0.5)*Lstep-locx)**2
         Vimp[i,j]=q/math.sqrt(rsq+hsq)
-    Vimp*=(1/4*math.pi*ep0)
+    Vimp/=(4*math.pi*ep0)
     return Vimp
 
 # compute Columb potential
@@ -152,7 +157,7 @@ def plot_profile(n):
     plt.xlabel('$r/l_B$',fontsize=20)
     plt.ylabel('$\\nu_{local}$', fontsize=20)
     plt.ylim(0,0.6)
-    plt.xlim(0,Lcut/2)
+    plt.xlim(0,Lcut/2+lb)
     plt.xticks(xticks,xlabels)
     plt.grid()
     plt.show()
@@ -246,7 +251,9 @@ class Fqhe():
         #heatmap([VTx,VTy],["VTx","VTy"])
         VT=(ay_wt*VTy+ax_wt*VTx)/self.VTrn
         #log("lr: %.4f\nnew VT:\n%s\nlast_VT:\n%s"%(self.lr,VT,self.VT_last))
-        self.VT_last=VT*self.lr+self.VT_last*(1-self.lr)
+        vtlr=self.lr
+        vtlr=vtlr if vtlr<1 else self.lr
+        self.VT_last=VT*vtlr+self.VT_last*(1-vtlr)
         #log("updated VT:\n%s"%(self.VT_last))
         #heatmap([VT,self.VT_last])
         self.n_updated=False
@@ -332,11 +339,17 @@ class Fqhe():
         bx=ax*(n_posi!=0)
         return "%.2f~%.2f"%(bx.min(),bx.max())
 
+    def tot_charge(n,mask=None):
+        if mask is None:
+            return n.sum()*Lstep**2
+        else:
+            return (n*mask).sum()*Lstep**2
+
     def eig_to_n(eigvec):
         n=eigvec.real**2+eigvec.imag**2
         n=n.sum(axis=1).reshape((Npts,Npts))
         n/=Lstep**2
-        assert abs(n.sum()*Lstep**2-Ne)<1e-8, "Seems there are too many electrons: %.8f!=%d"%(n.sum()*Lstep**2,Ne)
+        assert abs(Fqhe.tot_charge(n)-Ne)<1e-8, "Seems there are too many electrons: %.8f!=%d"%(n.sum()*Lstep**2,Ne)
         return n
 
     def gen_initst_a():
@@ -402,6 +415,11 @@ class Fqhe():
             eigvec.append(e)
         eigvec=numpy.transpose(eigvec)
         return Fqhe.eig_to_n(eigvec),eigvec
+
+    def save_state(savename,n_neo,eigvec):
+        with open(savename,"wb") as f:
+            log("saving state to %s"%(savename))
+            pickle.dump((n_neo,eigvec),f)
 
     def load_initst(filename):
         log("loading init state from %s"%(filename))
@@ -479,113 +497,109 @@ def dft_step(F,eigvec):
     Vks=F.gen_Vks(eigvec)
     H=T+Vks
     assert numpy.abs(H-H.getH()).max()<1e-13, "H not Hermitian: %.4e"%(numpy.abs(H-H.getH()).max())
-    max_energy=scipy.sparse.linalg.eigs(H,k=1,return_eigenvectors=False,v0=eigvec[:,0]).real
+    max_energy=scipy.sparse.linalg.eigs(H,k=1,return_eigenvectors=False).real
     H-=sparse.eye(F.n.size,dtype=numpy.cdouble)*max_energy[0]
     H=H.tocsr()
     energies,eigvec=scipy.sparse.linalg.eigs(H,k=Ne,v0=eigvec[:,0])
-    log("energies:\n%s"%(" ".join(["%.2f"%(i+max_energy) for i in energies.real])))
+    #log("energies:\n%s"%(" ".join(["%.2f"%(i+max_energy) for i in energies.real])))
     return Fqhe.eig_to_n(eigvec),eigvec
+
+def eval_sym(n):
+    twompt=Npts-1
+    score=0
+    for i,j in itertools.product(range(Npts//2),range(Npts//2)):
+        l2=[n[i,j],n[twompt-i,j],n[i,twompt-j],n[twompt-i,twompt-j]]
+        score+=max(l2)-min(l2)
+    return score/(Npts//2)**2
 
 def main():
     figdir="./fig_%s"%(time.strftime("%b%d").lower())
     if not os.path.exists(figdir):
         os.mkdir(figdir)
+    saveflag=True
+    checkpts=[0.05,0.02,0.01,0.002,0.001]
 
-    #Vimp=gen_Vimp((Lcut/2,Lcut/2+6*lb),0.2,10)
-    #heatmap([n_posi,Vimp],["posi bk","Vimp"])
+    Vimp=gen_Vimp((Lcut/2,Lcut/2),0.3,2)
+    heatmap([n_posi,Vimp],["posi bk","Vimp"])
 
     #n_neo,eigvec=Fqhe.gen_initst_c()
-    n_neo,eigvec=Fqhe.load_initst("./Ne50Npts288/eig_Ne50_m3_nu33_VTFalse_dN37465.dump")
+    n_neo,eigvec=Fqhe.load_initst("./Ne32Npts200/eig_Ne32_m3_nu33_VTTrue_dN5216.dump")
 
-    F=Fqhe(n_neo,eigvec,VT_switch=False)
+    #F=Fqhe(n_neo,eigvec,VT_switch=False)
     #F=Fqhe(n_neo,eigvec,VT_switch=True)
-    #F=Fqhe(n_neo,eigvec,VT_switch=True,Vimp=Vimp)
+    F=Fqhe(n_neo,eigvec,VT_switch=True,Vimp=Vimp)
 
     #heatmap([n_posi,n_neo],["positive bk","init st"])
     heatmap([n_neo,n_neo],["","init st"],savename=figdir+"/0.png")
     plot_profile(F.n)
 
-    for i in range(1,101):
+    ne_ints=[Fqhe.tot_charge(n_neo,mask_inter),]
+    log("charges inside R=%.2f: %.4f"%(Rinter,ne_ints[-1]))
+    for i in range(1,31):
         n_neo,eigvec=dft_step(F,eigvec)
         dN=numpy.abs(n_neo-F.n).sum()*Lstep**2
-        lr=min(dN/Ne+0.01,0.1)
+        sym_score=eval_sym(n_neo)
+        if sym_score<0.01:
+            lr=0.1
+        else:
+            """sym_score_n=eval_sym(F.n)
+            log("sym_scores: %.8f %.8f"%(sym_score,sym_score_n))
+            lr=min(sym_score_n/(sym_score+sym_score_n),0.05)"""
+            lr=min(dN/Ne+0.01,0.05)
         F.update_n(n_neo,lr)
 
-        log("iter %3d: dN=%.4f, lr=%.1f%%"%(i,dN,lr*100))
-        if i<5 or i%5==0:
-            heatmap([n_neo,F.n],["neo n","avg n, dN=%.4f"%(dN)],savename=figdir+"/%d.png"%(i))
-            plot_profile(F.n)
-        if dN<Ne*0.01:
+        log("iter %3d: dN=%.4f, sym=%.4f, lr=%.1f%%"%(i,dN,sym_score,lr*100))
+        ne_ints.append(Fqhe.tot_charge(n_neo,mask_inter))
+        log("charges inside R=%.2f: %.4f"%(Rinter,ne_ints[-1]))
+        heatmap([n_neo,F.n],["neo n","avg n, dN=%.4f"%(dN)],savename=figdir+"/%d.png"%(i))
+        plot_profile(F.n)
+
+        for cki,ck in enumerate(checkpts):
+            if ck==None:
+                continue
+            elif dN<Ne*ck:
+                if saveflag:
+                    savename="eig_Ne%d_m%d_nu%d_VT%s_dN%04d.dump"%(Ne,m_lauphlin,nu*1e2,F.VT_switch,dN*1e4)
+                    Fqhe.save_state(savename,n_neo,eigvec)
+                checkpts[cki]=None
+            else:
+                break
+        else:
             log("stop at iter %d"%(i))
             break
+
     plot_profile(F.n)
-    savename="eig_Ne%d_m%d_nu%d_VT%s_dN%04d.dump"%(Ne,m_lauphlin,nu*1e2,F.VT_switch,dN*1e4)
-    with open(savename,"wb") as f:
-        log("saving state to %s"%(savename))
-        pickle.dump((n_neo,eigvec),f)
+    log(",".join(["%.4f"%(i) for i in ne_ints]))
+    if saveflag:
+        savename="eig_Ne%d_m%d_nu%d_VT%s_dN%04d.dump"%(Ne,m_lauphlin,nu*1e2,F.VT_switch,dN*1e4)
+        Fqhe.save_state(savename,n_neo,eigvec)
 
 def plot1():
-    n_neo,eigvec=Fqhe.load_initst("./Ne10Npts128/eig_VTTrue_m3_nu33_dN0089.dump")
-    F=Fqhe(n_neo,eigvec,VT_switch=True)
-    plot_profile(F.n)
-    F.gen_Vks(eigvec)
+    n_neo,eigvec=Fqhe.load_initst("./Ne32Npts200/eig_Ne32_m3_nu33_VTTrue_dN3062.dump")
+    #heatmap([n_neo,n_posi,mask_inter])
+    log("inter charges: %.4f"%(Fqhe.tot_charge(n_neo,mask_inter)))
+    plot_profile(n_neo)
+    """F=Fqhe(n_neo,eigvec,VT_switch=True)
+    F.gen_Vks(eigvec)"""
 
 def plot2():
-    n_neo,eigvec=Fqhe.load_initst("./Ne10Npts128/eig_VTTrue_m3_nu33_dN0089.dump")
-    lls=Fqhe.gen_LL(10)
+    n_neo,eigvec=Fqhe.load_initst("./Ne32Npts200/eig_Ne32_m3_nu33_VTTrue_dN3062.dump")
+    num_lls=4
+    lls=Fqhe.gen_LL(40,num_lls=num_lls)
     eigvec=eigvec.transpose()
-    #eigvec=lls[2][0:10]
     eigoverlap=[[] for i in eigvec]
 
     xs=list(range(len(lls[0])))
-    fig,axs=plt.subplots(1,4,figsize=(6.4*4,4.8))
-    for i,e in enumerate(eigvec):
-        overlap=[abs(numpy.sum(e.conjugate()*l)) for l in lls[0]]
-        eigoverlap[i]+=overlap
-        axs[0].plot(xs,overlap,label="%d"%(i))
-    log(["%.4f"%(sum([j**2 for j in i])) for i in eigoverlap])
-    for i,e in enumerate(eigvec):
-        overlap=[abs(numpy.sum(e.conjugate()*l)) for l in lls[1]]
-        eigoverlap[i]+=overlap
-        axs[1].plot(xs,overlap,label="%d"%(i))
-    log(["%.4f"%(sum([j**2 for j in i])) for i in eigoverlap])
-    for i,e in enumerate(eigvec):
-        overlap=[abs(numpy.sum(e.conjugate()*l)) for l in lls[2]]
-        eigoverlap[i]+=overlap
-        axs[2].plot(xs,overlap,label="%d"%(i))
-    log(["%.4f"%(sum([j**2 for j in i])) for i in eigoverlap])
-    for i,e in enumerate(eigvec):
-        overlap=[abs(numpy.sum(e.conjugate()*l)) for l in lls[3]]
-        eigoverlap[i]+=overlap
-        axs[3].plot(xs,overlap,label="%d"%(i))
-    log(["%.4f"%(sum([j**2 for j in i])) for i in eigoverlap])
+    fig,axs=plt.subplots(1,num_lls,figsize=(6.4*num_lls,4.8))
+    for nl in range(num_lls):
+        for i,e in enumerate(eigvec):
+            overlap=[abs(numpy.sum(e.conjugate()*l)) for l in lls[nl]]
+            eigoverlap[i]+=overlap
+            axs[nl].plot(xs,overlap,label="%d"%(i))
+        log(["%.4f"%(sum([j**2 for j in i])) for i in eigoverlap])
+        axs[nl].set_ylim(0,0.8)
     axs[0].legend()
-    axs[0].set_ylim(0,0.9)
-    axs[1].set_ylim(0,0.9)
-    axs[2].set_ylim(0,0.9)
-    axs[3].set_ylim(0,0.9)
     plt.show()
-
-def test1():
-    n,eigvec=Fqhe.gen_initst_a()
-    F=Fqhe(n)
-    #log("density n:\n%s"%(n)) #pass
-    log("Ay\n%s"%(F.Ay)) #pass
-    Vxc=F.gen_Vxc()
-    #log("Vxc\n%s"%(Vxc)) #pass
-    VT=F.gen_VT(eigvec)
-    #log("VT\n%s"%(VT))
-    Ve=F.gen_Ve()
-    log("Ve: %.4f~%.4f"%(Ve.min(),Ve.max()))
-    seaborn.heatmap(Ve,square=True)
-    plt.show()
-
-def test_gen_Vimp():
-    hs=(1.0,2.0,3.0,4.0)
-    Vimps=[gen_Vimp((Lcut/2,Lcut/2),h,1) for h in hs]
-    heatmap(Vimps,["h=%1.f"%(h) for h in hs])
-    #plot_profile(Vimps[0])
 
 if __name__=="__main__":
-    #test1()
     main()

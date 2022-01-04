@@ -23,6 +23,21 @@ def test_gen_Vimp():
     heatmap(Vimps,["h=%1.f"%(h) for h in hs])
     #plot_profile(Vimps[0])
 
+def test_calc_nposi():
+    Lcut=11.8537
+    Npts=200
+    Lstep=Lcut/Npts
+    rs=list(numpy.linspace(198.5,201,1000))
+    plt.plot(rs,[calc_nposi(200+99.5,0+99.5,r*Lstep) for r in rs])
+    plt.grid()
+    plt.show()
+    plt.plot(rs,[calc_nposi(100+99.5,173+99.5,r*Lstep) for r in rs])
+    plt.grid()
+    plt.show()
+    plt.plot(rs,[calc_nposi(141+99.5,141+99.5,r*Lstep) for r in rs])
+    plt.grid()
+    plt.show()
+
+
 if __name__=="__main__":
-    test1()
-    test_gen_Vimp()
+    pass

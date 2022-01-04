@@ -25,7 +25,7 @@ from scipy import sparse
 import matplotlib.pyplot as plt
 
 # Number of electrons
-Ne=32
+Ne=10
 # Laughlin m
 m_lauphlin=3
 # Filling fraction
@@ -34,15 +34,15 @@ nu=1/3
 Mcf=0.067
 # Sample Radius
 Rsmp=math.sqrt(Ne/(nu*math.pi))
+log("Sample radius when Ne=%d, \\nu=%.4f: %.4f"%(Ne,nu,Rsmp))
 # magnetic length under this unit
 lb=1/math.sqrt(2*math.pi)
-log("Sample radius when Ne=%d, \\nu=%.4f: %.4f"%(Ne,nu,Rsmp))
 # Compute boundry size
 # for 32 electrons, 99.9% of them are in Rsmp+0.3*lb, 99.99% are in Rsmp+0.5*lb
 Lcut=2*(Rsmp+1*lb)
 #Lcut=math.sqrt(Ne/nu)
 # Discrete number and step size in each direction
-Npts=200
+Npts=128
 Lstep=Lcut/Npts
 log("m, nu, Mcf: %d, %.3f, %.3f"%(m_lauphlin,nu,Mcf))
 log("Cut Length, discrete step size: %.4f, %.4f"%(Lcut,Lstep))
@@ -59,35 +59,47 @@ B0=1
 Rinter=5*lb
 
 # positive disk
-sq2=math.sqrt(2)
 def calc_nposi(i,j,R):
-    rij=math.sqrt((i+0.5-Npts/2)**2+(j+0.5-Npts/2)**2)
-    dr=(R/Lstep)-(rij-sq2/2)
-    if dr>sq2:
-        return 1
-    elif dr<0:
-        return 0
-    elif dr<sq2/2:
-        return dr**2
+    x=j-(Npts-1)/2;y=i-(Npts-1)/2
+    Rxy=math.sqrt(x**2+y**2)
+    dR=R/Lstep-Rxy
+    if dR>math.sqrt(1/2):
+        return 1.0
+    elif dR<-math.sqrt(1/2):
+        return 0.0
     else:
-        return 1-(sq2-dr)**2
+        x=abs(x);y=abs(y)
+        x,y=(y,x) if y>x else (x,y)
+        ct=x/Rxy;st=y/Rxy
+        assert ct>=st>=0
+        dR0=(ct-st)/2;dR1=(ct+st)/2
+        if dR<-dR1:
+            return 0.0
+        elif dR<-dR0:
+            return (1/2)*(st/ct)*(1-(abs(dR)-dR0)/st)**2
+        elif dR<dR0:
+            return (1/2)*(st/ct+2*(dR+dR0)/ct)
+        elif dR<dR1:
+            return 1-(1/2)*(st/ct)*(1-(abs(dR)-dR0)/st)**2
+        else:
+            return 1.0
 
 n_posi=numpy.zeros((Npts,Npts))
 for i,j in itertools.product(range(Npts),range(Npts)):
     n_posi[i,j]=calc_nposi(i,j,Rsmp)
+#print((n_posi.sum()-math.pi*(Rsmp/Lstep)**2))
 n_posi*=-Ne/(n_posi.sum()*Lstep**2)
 
 mask_inter=numpy.zeros((Npts,Npts))
 for i,j in itertools.product(range(Npts),range(Npts)):
     mask_inter[i,j]=calc_nposi(i,j,Rinter)
-del sq2
 
 def gen_Vimp(locxy,h,q):
     """
         q: positive q stands for electron
     """
     locx,locy=locxy
-    log("generating impurity potential: xy=(%.2f,%.2f) h=%.1f q=%.1f"%(locx,locy,h,q))
+    log("generating impurity potential: xy=(%.2f,%.2f) h=%.4f q=%.1f"%(locx,locy,h,q))
     hsq=h*h
     Vimp=numpy.zeros((Npts,Npts))
     for i,j in itertools.product(range(Npts),range(Npts)):
@@ -182,6 +194,7 @@ class Fqhe():
         if self.VT_switch:
             self.VTrn=VTrn
             self.VT_last=numpy.zeros(self.n.shape)
+            self.VT_reset_flag=True
 
     def update_n(self,n_neo,lr):
         self.lr=lr
@@ -251,9 +264,14 @@ class Fqhe():
         #heatmap([VTx,VTy],["VTx","VTy"])
         VT=(ay_wt*VTy+ax_wt*VTx)/self.VTrn
         #log("lr: %.4f\nnew VT:\n%s\nlast_VT:\n%s"%(self.lr,VT,self.VT_last))
-        vtlr=self.lr
-        vtlr=vtlr if vtlr<1 else self.lr
-        self.VT_last=VT*vtlr+self.VT_last*(1-vtlr)
+        if self.VT_reset_flag:
+            log("VT reset")
+            self.VT_reset_flag=False
+            self.VT_last=VT*0.25
+        else:
+            vtlr=self.lr*2
+            vtlr=vtlr if vtlr<1 else self.lr
+            self.VT_last=VT*vtlr+self.VT_last*(1-vtlr)
         #log("updated VT:\n%s"%(self.VT_last))
         #heatmap([VT,self.VT_last])
         self.n_updated=False
@@ -512,21 +530,30 @@ def eval_sym(n):
         score+=max(l2)-min(l2)
     return score/(Npts//2)**2
 
+def eval_sym_updown(n):
+    twompt=Npts-1
+    score=0
+    for i,j in itertools.product(range(Npts//2),range(Npts)):
+        l2=[n[i,j],n[twompt-i,j],]
+        score+=max(l2)-min(l2)
+    return score/((Npts//2)*Npts)
+
 def main():
     figdir="./fig_%s"%(time.strftime("%b%d").lower())
     if not os.path.exists(figdir):
         os.mkdir(figdir)
     saveflag=True
-    checkpts=[0.05,0.02,0.01,0.002,0.001]
+    checkpts=[0.02,0.01,0.002,0.001]
 
-    Vimp=gen_Vimp((Lcut/2,Lcut/2),0.3,2)
+    Vimp=gen_Vimp((Lcut/2,Lcut/2),2*lb,1)
     heatmap([n_posi,Vimp],["posi bk","Vimp"])
 
     #n_neo,eigvec=Fqhe.gen_initst_c()
-    n_neo,eigvec=Fqhe.load_initst("./Ne32Npts200/eig_Ne32_m3_nu33_VTTrue_dN5216.dump")
+    n_neo,eigvec=Fqhe.load_initst("./Ne32Npts200/eig_Ne32_m3_nu33_VTFalse_dN1215.dump")
 
     #F=Fqhe(n_neo,eigvec,VT_switch=False)
     #F=Fqhe(n_neo,eigvec,VT_switch=True)
+    #F=Fqhe(n_neo,eigvec,VT_switch=False,Vimp=Vimp)
     F=Fqhe(n_neo,eigvec,VT_switch=True,Vimp=Vimp)
 
     #heatmap([n_posi,n_neo],["positive bk","init st"])
@@ -535,23 +562,28 @@ def main():
 
     ne_ints=[Fqhe.tot_charge(n_neo,mask_inter),]
     log("charges inside R=%.2f: %.4f"%(Rinter,ne_ints[-1]))
-    for i in range(1,31):
+    for i in range(1,41):
+        #if i%10==0:
+        #    F.VT_reset_flag=True
+
         n_neo,eigvec=dft_step(F,eigvec)
+
         dN=numpy.abs(n_neo-F.n).sum()*Lstep**2
         sym_score=eval_sym(n_neo)
+        #sym_score=eval_sym_updown(n_neo)
         if sym_score<0.01:
             lr=0.1
         else:
             """sym_score_n=eval_sym(F.n)
             log("sym_scores: %.8f %.8f"%(sym_score,sym_score_n))
             lr=min(sym_score_n/(sym_score+sym_score_n),0.05)"""
-            lr=min(dN/Ne+0.01,0.05)
+            lr=min(dN/Ne+0.01,0.1)
         F.update_n(n_neo,lr)
 
         log("iter %3d: dN=%.4f, sym=%.4f, lr=%.1f%%"%(i,dN,sym_score,lr*100))
         ne_ints.append(Fqhe.tot_charge(n_neo,mask_inter))
         log("charges inside R=%.2f: %.4f"%(Rinter,ne_ints[-1]))
-        heatmap([n_neo,F.n],["neo n","avg n, dN=%.4f"%(dN)],savename=figdir+"/%d.png"%(i))
+        heatmap([n_neo,F.n],["neo n, sym_score=%.4f"%(sym_score),"avg n, dN=%.4f"%(dN)],savename=figdir+"/%d.png"%(i))
         plot_profile(F.n)
 
         for cki,ck in enumerate(checkpts):
@@ -576,27 +608,29 @@ def main():
 
 def plot1():
     n_neo,eigvec=Fqhe.load_initst("./Ne32Npts200/eig_Ne32_m3_nu33_VTTrue_dN3062.dump")
-    #heatmap([n_neo,n_posi,mask_inter])
+    heatmap([n_neo,n_posi,mask_inter])
     log("inter charges: %.4f"%(Fqhe.tot_charge(n_neo,mask_inter)))
     plot_profile(n_neo)
     """F=Fqhe(n_neo,eigvec,VT_switch=True)
     F.gen_Vks(eigvec)"""
 
 def plot2():
-    n_neo,eigvec=Fqhe.load_initst("./Ne32Npts200/eig_Ne32_m3_nu33_VTTrue_dN3062.dump")
+    #n_neo,eigvec=Fqhe.load_initst("./Ne32Npts200/eig_Ne32_m3_nu33_VTTrue_dN5216.dump")
+    n_neo,eigvec=Fqhe.load_initst("./Ne10Npts128/eig_VTTrue_m3_nu33_dN0089.dump")
+
     num_lls=4
-    lls=Fqhe.gen_LL(40,num_lls=num_lls)
+    lls=Fqhe.gen_LL(30,num_lls=num_lls)
     eigvec=eigvec.transpose()
-    eigoverlap=[[] for i in eigvec]
+    all_ll=[[] for i in eigvec]
 
     xs=list(range(len(lls[0])))
     fig,axs=plt.subplots(1,num_lls,figsize=(6.4*num_lls,4.8))
     for nl in range(num_lls):
         for i,e in enumerate(eigvec):
-            overlap=[abs(numpy.sum(e.conjugate()*l)) for l in lls[nl]]
-            eigoverlap[i]+=overlap
-            axs[nl].plot(xs,overlap,label="%d"%(i))
-        log(["%.4f"%(sum([j**2 for j in i])) for i in eigoverlap])
+            this_ll=[abs(numpy.vdot(e,l)) for l in lls[nl]]
+            axs[nl].plot(xs,this_ll,label="%d"%(i))
+            all_ll[i]+=this_ll
+        log(["%.4f"%(sum([abs(j)**2 for j in i])) for i in all_ll])
         axs[nl].set_ylim(0,0.8)
     axs[0].legend()
     plt.show()

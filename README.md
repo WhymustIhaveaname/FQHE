@@ -15,6 +15,19 @@ The following figure shows the self-consistency procedure and the usage of most 
 
 ![programme_structure.png](https://raw.githubusercontent.com/WhymustIhaveaname/FQHE_media/main/programme_structure.png)
 
+The dependency relation of python scripts is
+
+```
+Fconsts ---> Futil ---> Fqhe ---> Flll
+```
+
+* Functions for DFT are in `Fqhe.py`
+* `Futil.py` contains some utility funtions such as
+    * for generating init states: `eig_to_n`, `gen_initst_*`, `gen_LL`
+    * save and load partial results: `save_state`, `load_initst`
+    * visualization: `heatmap`, `plot_profile`, `view_A`
+* `Fconsts.py` defines constants such as electron number, filling fraction, etc. as well as `n_posi` and `ewt_tab` for computing Coulomb force.
+
 ## Todo List
 
 - [x] Check the codes for computing ground state again.

@@ -4,7 +4,6 @@
 import math,numpy,itertools,os
 import scipy,scipy.sparse.linalg
 from scipy import sparse
-from Fconsts import *
 from Futil import *
 
 figdir="./fig_%s"%(time.strftime("%b%d").lower())
@@ -12,7 +11,7 @@ if not os.path.exists(figdir):
     os.mkdir(figdir)
 
 class Fqhe():
-    def __init__(self,n,eigvec,VT_switch=False,VTrn=1.0,Vimp=None):
+    def __init__(self,n,VT_switch=False,VTrn=1.0,Vimp=None):
         self.n=n
         self.VT_switch=VT_switch
         if Vimp is not None:
@@ -265,10 +264,7 @@ def main():
     #n_neo,eigvec=Futil.gen_initst_c()
     n_neo,eigvec=Futil.load_initst("./Ne32Npts200/eig_Ne32_m3_nu33_VTFalse_dN1215.dump")
 
-    #F=Fqhe(n_neo,eigvec,VT_switch=False)
-    #F=Fqhe(n_neo,eigvec,VT_switch=True)
-    #F=Fqhe(n_neo,eigvec,VT_switch=False,Vimp=Vimp)
-    F=Fqhe(n_neo,eigvec,VT_switch=True,Vimp=Vimp)
+    F=Fqhe(n_neo,VT_switch=True,Vimp=Vimp)
 
     Futil.heatmap([n_neo,n_neo],["","init st"],savename=figdir+"/0.png")
     Futil.plot_profile(F.n)

@@ -94,10 +94,8 @@ mask_inter=numpy.zeros((Npts,Npts))
 for i,j in itertools.product(range(Npts),range(Npts)):
     mask_inter[i,j]=calc_nposi(i,j,Rinter)
 
+"""
 def calc_ewt(i,j):
-    """
-        for computing the columb potentital from density
-    """
     wtdict={(0,0):3.7393513,
             (1,0):1.0952306,(1,1):0.7236673,
             (2,0):0.50709472,(2,1):0.45178021,(2,2):0.35572797,
@@ -114,6 +112,27 @@ def calc_ewt(i,j):
         assert i>3 or j>3
         r=math.sqrt(i**2+j**2)
         return 1/r+1/(20*r**3)# no need for higher order +(-4*i**2+27*i**2*j**2-4*j**2)/(280*r**9)
+"""
+
+def calc_ewt(i,j):
+    """
+        for computing the columb potentital from density
+        using 4-node quadrilateral element which is popular in finite element society
+    """
+    wtdict={(0,0):2.9732096,
+            (1,0):1.1121287, (1,1):0.7489524,
+            (2,0):0.51072678, (2,1):0.45529494, (2,2):0.35750222,
+            (3,0):0.33645621, (3,1):0.31893423, (3,2):0.27919536, (3,3): 0.23682706,
+            (4,0):0.25131048, (4,1):0.24373869}
+    i=abs(i);j=abs(j)
+    if (i,j) in wtdict:
+        return wtdict[(i,j)]
+    elif (j,i) in wtdict:
+        return wtdict[(j,i)]
+    else:
+        assert i*i+j*j>18
+        r=math.sqrt(i**2+j**2)
+        return 1/r+1/(12*r**3)+(-4*i**4+27*i**2*j**2-4*j**2)/(48*r**9)
 
 # for computing Columb potential
 # ewt_tab = electric weight table

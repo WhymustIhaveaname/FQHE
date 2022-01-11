@@ -101,12 +101,12 @@ class Futil():
                 e[i*Npts+j]=(r**m)*math.exp(-abs(r)**2/4)
             e/=numpy.linalg.norm(e)
             eigvec.append(e)"""
-        eigvec=Fqhe.gen_LL(Ne,num_lls=1)[0]
+        eigvec=Futil.gen_LL(Ne,num_lls=1)[0]
         eigvec=numpy.transpose(eigvec)
         return Fqhe.eig_to_n(eigvec),eigvec
 
     def gen_initst_c():
-        LLs=Fqhe.gen_LL(Ne,num_lls=4)
+        LLs=Futil.gen_LL(Ne,num_lls=4)
         eigvec=[]
         for m in range(Ne):
             e=LLs[0][m]-LLs[1][m]+LLs[2][m]-LLs[3][m]

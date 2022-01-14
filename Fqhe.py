@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: UTF-8 -*-
 
-import math,numpy,itertools,os
+import os,multiprocessing,gc
 import scipy,scipy.sparse.linalg
 from scipy import sparse
 from Futil import *
@@ -12,6 +12,8 @@ if not os.path.exists(figdir):
 
 class Fqhe():
     def __init__(self,n,VT_switch=False,VTrn=1.0,Vimp=None):
+        self.parallel_num=16
+        log("parallel_num: %d"%(self.parallel_num))
         self.n=n
         self.VT_switch=VT_switch
         if Vimp is not None:
@@ -44,13 +46,13 @@ class Fqhe():
         self.Ax=Fqhe.gen_Ax(B)*ax_wt
         self.Ay=Fqhe.gen_Ay(B)*ay_wt
         self.A_updated=True
-        #log("Ax: %s, Ay: %s"%(Fqhe.range_on_disk(self.Ax),Fqhe.range_on_disk(self.Ay)))
-        #Fqhe.view_A((self.Ax,self.Ay),B)
+        log("Ax: %s, Ay: %s"%(Futil.range_on_disk(self.Ax),Futil.range_on_disk(self.Ay)))
+        #Futil.view_A((self.Ax,self.Ay),B)
 
     def gen_Ay(B):
         Ay=numpy.zeros(B.shape)
-        for i,j in itertools.product(range(Npts),range(1,Npts)):
-            Ay[i,j]=Ay[i,j-2]+2*Lstep*B[i,j-1]
+        for j in range(1,Npts):
+            Ay[:,j]=Ay[:,j-1]+Lstep*(B[:,j]+B[:,j-1])/2
         for i in range(Npts):
             Ay[i,:]-=numpy.mean(Ay[i,:])
         return Ay
@@ -58,7 +60,7 @@ class Fqhe():
     def gen_Ax(B):
         Ax=numpy.zeros(B.shape)
         for i in range(1,Npts):
-            Ax[i,:]=Ax[i-2,:]-2*Lstep*B[i-1,:]
+            Ax[i,:]=Ax[i-1,:]-Lstep*(B[i,:]+B[i-1,:])/2
         for j in range(Npts):
             Ax[:,j]-=numpy.mean(Ax[:,j])
         return Ax
@@ -154,13 +156,61 @@ class Fqhe():
         """
             electric potential, including Vext and VH
         """
-        n_all=n_posi+self.n
-        assert abs(n_all.sum()*Lstep**2)<1e-8,"Sum of positive-negative charges not zero: %.4e"%(n_all.sum())
+        tik=time.time()
+        n_all=(n_posi+self.n).astype(numpy.float32)
+        n_all_sum=abs(n_all.sum()*Lstep**2)
+        assert n_all_sum<1e-6,"Sum of positive-negative charges not zero: %.4e"%(n_all_sum)
         Ve=numpy.zeros((Npts,Npts))
         for i,j in itertools.product(range(Npts),range(Npts)):
             Ve+=n_all[i,j]*ewt_tab[Npts-1-i:2*Npts-1-i,Npts-1-j:2*Npts-1-j]
             #assert ewt_tab[Npts-1-i:2*Npts-1-i,Npts-1-j:2*Npts-1-j][i,j]==3.7393513
         Ve*=Lstep/(4*math.pi*ep0)
+        tok=time.time()
+        log("got Ve in %.2f s"%(tok-tik))
+        Futil.heatmap([Ve],["Ve"])
+        return Ve
+
+    def gen_Ve_sigle_t(index,row_start,row_end,n_all,q):
+        #log("thread no.%d: %d-%d rows"%(index,row_start,row_end))
+        Ve=numpy.zeros((row_end-row_start,Npts),dtype=numpy.float32)
+        for i,j in itertools.product(range(row_start,row_end),range(Npts)):
+            Ve[i-row_start,j]=numpy.sum(n_all*ewt_tab[Npts-1-i:2*Npts-1-i,Npts-1-j:2*Npts-1-j])
+        Ve*=Lstep/(4*math.pi*ep0)
+        q.put_nowait((index,Ve))
+        #log("thread no.%d finished"%(index))
+
+    def gen_Ve_para(self):
+        tik=time.time()
+        n_all=(n_posi+self.n).astype(numpy.float32)
+        n_all_sum=abs(n_all.sum()*Lstep**2)
+        assert n_all_sum<1e-6,"Sum of positive-negative charges not zero: %.4e"%(n_all_sum)
+
+        row_per_t=Npts//self.parallel_num
+        row_start=0
+        forkcontext=multiprocessing.get_context('fork')
+        q=forkcontext.Queue()
+        ps=[]
+        gc.collect()
+        for t in range(self.parallel_num):
+            row_end=row_start+row_per_t
+            if t<Npts-self.parallel_num*row_per_t:
+                row_end+=1
+            args=(t,row_start,row_end,n_all,q)
+            p=forkcontext.Process(target=Fqhe.gen_Ve_sigle_t,args=args,name="t%d"%(t))
+            p.start();ps.append(p)
+            row_start=row_end
+
+        Ves=[q.get() for i in range(self.parallel_num)]
+        for p in ps:
+            p.join();p.close()
+
+        Ves.sort(key=lambda x:x[0])
+        assert Ves[0][0]<Ves[-1][0], "make sure it is in increasing order"
+        Ve=numpy.concatenate([i[1] for i in Ves])
+
+        tok=time.time()
+        log("got Ve in %.4f s"%(tok-tik))
+        Futil.heatmap([Ve],["Ve"])
         return Ve
 
     def gen_T(self):
@@ -212,7 +262,8 @@ class Fqhe():
             generate potential term in Hamiltonian
         """
         assert self.A_updated
-        Ve=self.gen_Ve()
+        Ve=self.gen_Ve_para()
+        #log(numpy.max(numpy.abs(Ve-self.gen_Ve())))
         Vxc=self.gen_Vxc()
         if self.VT_switch:
             VT=self.gen_VT(eigvec)
@@ -227,8 +278,8 @@ class Fqhe():
         return Vks
 
 def dft_step(F,eigvec):
-    T=F.gen_T()
     Vks=F.gen_Vks(eigvec)
+    T=F.gen_T()
     H=T+Vks
     assert numpy.abs(H-H.getH()).max()<1e-13, "H not Hermitian: %.4e"%(numpy.abs(H-H.getH()).max())
     max_energy=scipy.sparse.linalg.eigs(H,k=1,return_eigenvectors=False).real

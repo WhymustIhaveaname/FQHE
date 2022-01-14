@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: UTF-8 -*-
 
-import time,sys,traceback,math
+import time,traceback,math
 
 LOGLEVEL={0:"DEBUG",1:"INFO",2:"WARN",3:"ERR",4:"FATAL"}
-LOGFILE="/home/public/youran_FQHE/Fqhe.log"
+LOGFILE="/home/public/youran_Fqhe/Fqhe.log"
 def log(msg,l=1,end="\n",logfile=LOGFILE):
     st=traceback.extract_stack()[-2]
     lstr=LOGLEVEL[l]
@@ -22,36 +22,38 @@ def log(msg,l=1,end="\n",logfile=LOGFILE):
 import numpy,itertools
 
 # Number of electrons
-Ne=32
+Ne=10
 # Laughlin m
 m_lauphlin=3
 # Filling fraction
 nu=1/3
-# mass for CF, under the nature unit me=1
-Mcf=0.067
+log("Ne, m, nu: %d, %d, %.6f"%(Ne,m_lauphlin,nu))
+# Discrete number and step size in each direction
+Lstep=0.015
+
 # Sample Radius
 Rsmp=math.sqrt(Ne/(nu*math.pi))
-log("Sample radius when Ne=%d, \\nu=%.4f: %.4f"%(Ne,nu,Rsmp))
 # magnetic length under this unit
 lb=1/math.sqrt(2*math.pi)
 # Compute boundry size
 # for 32 electrons, 99.9% of them are in Rsmp+0.3*lb, 99.99% are in Rsmp+0.5*lb
-Lcut=2*(Rsmp+1*lb)
-#Lcut=math.sqrt(Ne/nu)
-# Discrete number and step size in each direction
-Npts=200
+# so add extra 1 lb on both side is enough
+# for 10 electrons without positive bk, we need to at least plus 2.5-3 lb
+Lcut=2*(Rsmp+3*lb)
+Npts=int(Lcut/Lstep)
 Lstep=Lcut/Npts
-log("m, nu, Mcf: %d, %.3f, %.3f"%(m_lauphlin,nu,Mcf))
-log("Cut Length, discrete step size: %.4f, %.4f"%(Lcut,Lstep))
-# weight for Ay
-ax_wt=0.5
-ay_wt=0.5
+log("Sample radius, Cut Length: %.4f, %.4f = %.6f x %d"%(Rsmp,Lcut,Lstep,Npts))
+
+# weight for Ax, Ay
+ax_wt=0.5;ay_wt=0.5
 log("ax_wt, ay_wt: %.1f, %.1f"%(ax_wt,ay_wt))
-# vacuum permittivity
-# using the data for GaAs
+# mass for CF, under the nature unit me=1
+Mcf=0.067
+# vacuum permittivity, using the data for GaAs
 ep0=2.585105102e-3*12.6
 # background B
 B0=1
+log("Mcf, epsilon0, B0: %.4f, %.3e, %.2f"%(Mcf,ep0,B0))
 
 def calc_nposi(i,j,R):
     """
@@ -82,7 +84,7 @@ def calc_nposi(i,j,R):
             return 1.0
 
 # charge density for positive disk
-n_posi=numpy.zeros((Npts,Npts))
+n_posi=numpy.zeros((Npts,Npts),dtype=numpy.float32)
 for i,j in itertools.product(range(Npts),range(Npts)):
     n_posi[i,j]=calc_nposi(i,j,Rsmp)
 #print((n_posi.sum()-math.pi*(Rsmp/Lstep)**2))
@@ -90,7 +92,7 @@ n_posi*=-Ne/(n_posi.sum()*Lstep**2)
 
 # for integrating charges of interior
 Rinter=5*lb
-mask_inter=numpy.zeros((Npts,Npts))
+mask_inter=numpy.zeros((Npts,Npts),dtype=numpy.float32)
 for i,j in itertools.product(range(Npts),range(Npts)):
     mask_inter[i,j]=calc_nposi(i,j,Rinter)
 
@@ -136,6 +138,6 @@ def calc_ewt(i,j):
 
 # for computing Columb potential
 # ewt_tab = electric weight table
-ewt_tab=numpy.zeros((2*Npts-1,2*Npts-1))
-for i,j in itertools.product(range(2*Npts-1),range(2*Npts-1)):
-    ewt_tab[i,j]=calc_ewt(Npts-1-i,Npts-1-j)
+ewt_tab=numpy.zeros((2*Npts-1,2*Npts-1),dtype=numpy.float32)
+for i,j in itertools.product(range(Npts),range(Npts)):
+    ewt_tab[i,j]=ewt_tab[2*Npts-2-i,j]=ewt_tab[i,2*Npts-2-j]=ewt_tab[2*Npts-2-i,2*Npts-2-j]=calc_ewt(Npts-1-i,Npts-1-j)

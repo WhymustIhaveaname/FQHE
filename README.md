@@ -27,10 +27,12 @@ Fconsts ---> Futil ---> Fqhe ---> Flll
     * save and load partial results: `save_state`, `load_initst`
     * visualization: `heatmap`, `plot_profile`, `view_A`
 * `Fconsts.py` defines constants such as electron number, filling fraction, etc. as well as `n_posi` and `ewt_tab` for computing Coulomb force.
+* `Ubuntu_mono` is a font used in visualization
 
 ## Todo List
 
 - [x] Check the codes for computing ground state again.
+- [ ] Rewrite the Columb potential `Vc` part in C/C++. 
 - [ ] Try different `nu` and `m` to probe the limit of this algorithm
 - [ ] Put a point charge above the disk, both at the center and a little away from the center, to study how to excite anyons
 - [ ] Braiding
